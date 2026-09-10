@@ -16,6 +16,11 @@ COLOR_MINE = "#f28b82"     # red   : the solver proved this cell is a mine
 COLOR_SAFE = "#81c995"     # green : the solver proved this cell is safe
 COLOR_UNKNOWN = "#c0c0c0"  # gray  : still unknown after solving
 COLOR_NEUTRAL = "white"    # white : cells the user typed into / untouched
+COLOR_SELECTED = "#cfe2ff" # blue  : the input cell chosen in one-cell mode
+
+"the two solve modes offered by the radio buttons"
+MODE_BOARD = "board"  # solve and show every cell
+MODE_CELL = "cell"    # solve, but only reveal the one cell the user clicked
 
 "font shared by the input cells and the result cells so they line up"
 CELL_FONT = ("Consolas", 12)
@@ -37,6 +42,8 @@ class SolverApp:
         self.vars = []
         "results[r][c] is the Label widget for result cell (r, c)"
         self.results = []
+        "the (r, c) of the input cell the user last clicked or typed into"
+        self.selected = None
         "the frame currently on screen (size form or board) so we can destroy it"
         self.frame = None
         "start on the size form"
@@ -99,6 +106,7 @@ class SolverApp:
         self.entries = []
         self.vars = []
         self.results = []
+        self.selected = None
 
         "--- left half: the editable input grid ---"
         "a heading so the two grids are easy to tell apart"
@@ -129,9 +137,9 @@ class SolverApp:
                 entry.grid(row=r, column=c)
                 "remember the coordinates on the widget for the focus-jump logic"
                 entry.coords = (r, c)
-                "when a cell gains focus, select its text so typing replaces it"
-                "(otherwise typing into a cell that already has a digit would be rejected)"
-                entry.bind("<FocusIn>", lambda e: e.widget.selection_range(0, tk.END))
+                "when a cell gains focus (click or focus jump) remember it as the"
+                "selected cell and select its text so typing replaces it"
+                entry.bind("<FocusIn>", lambda e: self.on_focus(e.widget))
                 row_entries.append(entry)
                 row_vars.append(var)
             self.entries.append(row_entries)
@@ -163,24 +171,53 @@ class SolverApp:
         self.result_heading.grid_remove()
         self.result_frame.grid_remove()
 
-        "--- bottom: the mine count field, the summary line, and the buttons ---"
+        "--- bottom: mode switch, mine count field, summary line, and buttons ---"
         controls = tk.Frame(self.frame)
         controls.grid(row=2, column=0, columnspan=2, pady=(10, 0))
+        "radio buttons choosing between solving everything and solving one cell"
+        self.mode_var = tk.StringVar(value=MODE_BOARD)
+        modes = tk.Frame(controls)
+        modes.grid(row=0, column=0, columnspan=2)
+        tk.Radiobutton(
+            modes, text="Whole board", variable=self.mode_var, value=MODE_BOARD,
+            command=self.refresh_highlight,
+        ).grid(row=0, column=0)
+        tk.Radiobutton(
+            modes, text="One cell (click it, then Solve)", variable=self.mode_var, value=MODE_CELL,
+            command=self.refresh_highlight,
+        ).grid(row=0, column=1)
         "total mines on the board; leaving it blank means 'not known'"
-        tk.Label(controls, text="Total mines (optional):").grid(row=0, column=0, sticky="e")
+        tk.Label(controls, text="Total mines (optional):").grid(row=1, column=0, sticky="e")
         self.mines_var = tk.StringVar()
-        tk.Entry(controls, textvariable=self.mines_var, width=5).grid(row=0, column=1, sticky="w")
+        tk.Entry(controls, textvariable=self.mines_var, width=5).grid(row=1, column=1, sticky="w")
         "one line of text summarising the last solve, e.g. '2 mines, 1 safe, 3 unknown'"
         self.summary_var = tk.StringVar()
-        tk.Label(controls, textvariable=self.summary_var).grid(row=1, column=0, columnspan=2)
+        tk.Label(controls, textvariable=self.summary_var).grid(row=2, column=0, columnspan=2)
         "the three action buttons"
         buttons = tk.Frame(controls)
-        buttons.grid(row=2, column=0, columnspan=2, pady=(6, 0))
+        buttons.grid(row=3, column=0, columnspan=2, pady=(6, 0))
         tk.Button(buttons, text="Solve", command=self.solve_board).grid(row=0, column=0, padx=3)
         tk.Button(buttons, text="Clear board", command=self.clear_board).grid(row=0, column=1, padx=3)
         tk.Button(buttons, text="New size", command=self.show_size_form).grid(row=0, column=2, padx=3)
         "put the cursor in the top-left cell so the user can start typing at once"
         self.entries[0][0].focus_set()
+
+    def on_focus(self, entry):
+        "an input cell was clicked or tabbed into: it becomes the selected cell"
+        self.selected = entry.coords
+        "select its text so typing replaces it (otherwise a second char is rejected)"
+        entry.selection_range(0, tk.END)
+        self.refresh_highlight()
+
+    def refresh_highlight(self):
+        "tint the selected input cell blue, but only in one-cell mode"
+        for r in range(self.rows):
+            for c in range(self.cols):
+                "everything back to neutral first"
+                self.entries[r][c].configure(bg=COLOR_NEUTRAL)
+        if self.mode_var.get() == MODE_CELL and self.selected is not None:
+            r, c = self.selected
+            self.entries[r][c].configure(bg=COLOR_SELECTED)
 
     def validate(self, proposed, widget_name):
         "called on every keystroke; return True to accept the edit, False to reject"
@@ -283,6 +320,26 @@ class SolverApp:
         except Exception as exc:  # solver hit something it could not handle
             messagebox.showerror("Solver error", str(exc))
             return
+        "the back end is identical for both modes; only the painting differs"
+        if self.mode_var.get() == MODE_BOARD:
+            self.paint_board(grid, mines, safes)
+        else:
+            if not self.paint_cell(grid, mines, safes):
+                return
+        "now that the result grid is filled in, show it next to the input grid"
+        self.result_heading.grid()
+        self.result_frame.grid()
+
+    def verdict(self, cell, mines, safes):
+        "return ('M', red) / ('S', green) / ('?', gray) for one unknown cell"
+        if cell in mines:
+            return "M", COLOR_MINE
+        if cell in safes:
+            return "S", COLOR_SAFE
+        return "?", COLOR_UNKNOWN
+
+    def paint_board(self, grid, mines, safes):
+        "whole-board mode: colour every unknown cell with its verdict"
         "how many cells are still undecided, for the summary line"
         unknown = 0
         for r in range(self.rows):
@@ -292,17 +349,36 @@ class SolverApp:
                 "typed numbers and F are copied across on a neutral background"
                 if ch != "?":
                     label.configure(text=ch, bg=COLOR_NEUTRAL)
-                elif (r, c) in mines:
-                    label.configure(text="M", bg=COLOR_MINE)
-                elif (r, c) in safes:
-                    label.configure(text="S", bg=COLOR_SAFE)
-                else:
-                    label.configure(text="?", bg=COLOR_UNKNOWN)
+                    continue
+                text, color = self.verdict((r, c), mines, safes)
+                label.configure(text=text, bg=color)
+                if text == "?":
                     unknown += 1
         self.summary_var.set(f"{len(mines)} mines, {len(safes)} safe, {unknown} unknown")
-        "now that the result grid is filled in, show it next to the input grid"
-        self.result_heading.grid()
-        self.result_frame.grid()
+
+    def paint_cell(self, grid, mines, safes):
+        "one-cell mode: copy the input across and reveal only the selected cell"
+        "returns False (after an error dialog) if there is no usable selection"
+        if self.selected is None:
+            messagebox.showerror("No cell selected", "Click a cell in the input grid first.")
+            return False
+        sr, sc = self.selected
+        if grid[sr][sc] != "?":
+            messagebox.showerror(
+                "Cell already known",
+                f"Cell ({sr}, {sc}) is a '{grid[sr][sc]}' you typed in; pick an unrevealed cell.",
+            )
+            return False
+        for r in range(self.rows):
+            for c in range(self.cols):
+                "every cell mirrors the input exactly, unknowns shown as '?' on white"
+                self.results[r][c].configure(text=grid[r][c], bg=COLOR_NEUTRAL)
+        "only the selected cell gets its verdict and colour"
+        text, color = self.verdict((sr, sc), mines, safes)
+        self.results[sr][sc].configure(text=text, bg=color)
+        meaning = {"M": "a mine", "S": "safe", "?": "unknown"}[text]
+        self.summary_var.set(f"Cell ({sr}, {sc}) is {meaning}")
+        return True
 
     def clear_board(self):
         "wipe every input cell back to empty and hide the result grid"
@@ -312,6 +388,7 @@ class SolverApp:
                 self.set_cell(self.entries[r][c], "")
         self.mines_var.set("")
         "back to the top-left corner, ready for a new position"
+        "(focus_set fires on_focus, which also resets the selection highlight)"
         self.entries[0][0].focus_set()
 
 

@@ -37,6 +37,8 @@ python gui.py    # graphical version (tkinter)
 
 In the GUI, an empty box also means unrevealed, and a lowercase `f` is accepted as `F`. Clicking Solve shows a second grid beside your input: proven mines are red with an `M`, proven safe cells are green with an `S`, undecided cells are gray with a `?`, and the numbers and flags you typed are copied across unchanged. Your input grid stays editable, so you can tweak it and solve again. The "Total mines" box is optional (see above); the console version does not ask for it.
 
+Two solve modes are available via the radio buttons. **Whole board** reveals the verdict for every unrevealed cell. **One cell** is for when you only want a hint: click the unrevealed cell you are curious about (it turns light blue), then press Solve. The solved grid mirrors your input exactly except for that one cell, which shows M, S, or ?. The solver still runs on the whole board behind the scenes; only the display is limited.
+
 Console output coordinates are `(row, col)`, counted from zero.
 
 ## Worked example
