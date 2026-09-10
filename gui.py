@@ -3,23 +3,26 @@
 import tkinter as tk
 "messagebox gives us the small pop-up windows used for error messages"
 from tkinter import messagebox
-"solve(grid) is the only thing we need from solver.py"
-from solver import solve
+"solve_with_total wraps solver.solve and optionally uses the total mine count"
+from total_mines import solve_with_total
 
 "the biggest board we allow in either direction, so the window stays usable"
 MAX_SIZE = 40
 "every character a cell is allowed to hold (lowercase f is normalised to F)"
 ALLOWED = set("012345678?F")
 
-"colours used when painting the board after a solve"
+"colours used when painting the result grid after a solve"
 COLOR_MINE = "#f28b82"     # red   : the solver proved this cell is a mine
 COLOR_SAFE = "#81c995"     # green : the solver proved this cell is safe
 COLOR_UNKNOWN = "#c0c0c0"  # gray  : still unknown after solving
 COLOR_NEUTRAL = "white"    # white : cells the user typed into / untouched
 
+"font shared by the input cells and the result cells so they line up"
+CELL_FONT = ("Consolas", 12)
+
 
 class SolverApp:
-    "the whole application: a size form, then a grid of entry boxes"
+    "the whole application: a size form, then an input grid beside a result grid"
 
     def __init__(self, root):
         "root is the main tkinter window"
@@ -28,10 +31,12 @@ class SolverApp:
         "the current board size, filled in once the user submits the form"
         self.rows = 0
         self.cols = 0
-        "entries[r][c] is the Entry widget for cell (r, c)"
+        "entries[r][c] is the Entry widget for input cell (r, c)"
         self.entries = []
-        "vars[r][c] is the StringVar holding the text of cell (r, c)"
+        "vars[r][c] is the StringVar holding the text of input cell (r, c)"
         self.vars = []
+        "results[r][c] is the Label widget for result cell (r, c)"
+        self.results = []
         "the frame currently on screen (size form or board) so we can destroy it"
         self.frame = None
         "start on the size form"
@@ -85,21 +90,26 @@ class SolverApp:
         self.show_board()
 
     # ------------------------------------------------------------------
-    # screen 2: the board
+    # screen 2: the board (input grid on the left, result grid on the right)
     # ------------------------------------------------------------------
 
     def show_board(self):
-        "draw a rows x cols grid of one-character entry boxes plus the buttons"
+        "draw the input grid, the (initially hidden) result grid, and the controls"
         self.clear_frame()
         self.entries = []
         self.vars = []
+        self.results = []
+
+        "--- left half: the editable input grid ---"
+        "a heading so the two grids are easy to tell apart"
+        tk.Label(self.frame, text="Input", font=("Segoe UI", 10, "bold")).grid(row=0, column=0)
         "register the validation function once so tkinter can call it per keystroke"
         "%P is the text the entry WOULD contain if the edit were allowed"
         "%W is the name of the widget being edited, so we know which cell it is"
         vcmd = (self.root.register(self.validate), "%P", "%W")
-        "a sub-frame just for the cells so the buttons can sit underneath"
+        "a sub-frame just for the input cells"
         board = tk.Frame(self.frame)
-        board.grid(row=0, column=0, columnspan=3)
+        board.grid(row=1, column=0, padx=(0, 10))
         for r in range(self.rows):
             row_entries = []
             row_vars = []
@@ -111,7 +121,7 @@ class SolverApp:
                     textvariable=var,
                     width=2,
                     justify="center",
-                    font=("Consolas", 12),
+                    font=CELL_FONT,
                     validate="key",
                     validatecommand=vcmd,
                     bg=COLOR_NEUTRAL,
@@ -120,16 +130,55 @@ class SolverApp:
                 "remember the coordinates on the widget for the focus-jump logic"
                 entry.coords = (r, c)
                 "when a cell gains focus, select its text so typing replaces it"
-                "(otherwise typing into a cell that already has M/S/a digit would be rejected)"
+                "(otherwise typing into a cell that already has a digit would be rejected)"
                 entry.bind("<FocusIn>", lambda e: e.widget.selection_range(0, tk.END))
                 row_entries.append(entry)
                 row_vars.append(var)
             self.entries.append(row_entries)
             self.vars.append(row_vars)
-        "the three action buttons under the board"
-        tk.Button(self.frame, text="Solve", command=self.solve_board).grid(row=1, column=0, pady=(8, 0))
-        tk.Button(self.frame, text="Clear board", command=self.clear_board).grid(row=1, column=1, pady=(8, 0))
-        tk.Button(self.frame, text="New size", command=self.show_size_form).grid(row=1, column=2, pady=(8, 0))
+
+        "--- right half: the read-only result grid ---"
+        "heading and frame are built now but hidden until the first solve"
+        self.result_heading = tk.Label(self.frame, text="Solved", font=("Segoe UI", 10, "bold"))
+        self.result_heading.grid(row=0, column=1)
+        self.result_frame = tk.Frame(self.frame)
+        self.result_frame.grid(row=1, column=1, padx=(10, 0))
+        for r in range(self.rows):
+            row_labels = []
+            for c in range(self.cols):
+                "a Label styled like an Entry: same font, same width, sunken border"
+                label = tk.Label(
+                    self.result_frame,
+                    text="",
+                    width=2,
+                    font=CELL_FONT,
+                    bg=COLOR_NEUTRAL,
+                    relief="sunken",
+                    bd=1,
+                )
+                label.grid(row=r, column=c)
+                row_labels.append(label)
+            self.results.append(row_labels)
+        "grid_remove hides the widgets but remembers their layout for later"
+        self.result_heading.grid_remove()
+        self.result_frame.grid_remove()
+
+        "--- bottom: the mine count field, the summary line, and the buttons ---"
+        controls = tk.Frame(self.frame)
+        controls.grid(row=2, column=0, columnspan=2, pady=(10, 0))
+        "total mines on the board; leaving it blank means 'not known'"
+        tk.Label(controls, text="Total mines (optional):").grid(row=0, column=0, sticky="e")
+        self.mines_var = tk.StringVar()
+        tk.Entry(controls, textvariable=self.mines_var, width=5).grid(row=0, column=1, sticky="w")
+        "one line of text summarising the last solve, e.g. '2 mines, 1 safe, 3 unknown'"
+        self.summary_var = tk.StringVar()
+        tk.Label(controls, textvariable=self.summary_var).grid(row=1, column=0, columnspan=2)
+        "the three action buttons"
+        buttons = tk.Frame(controls)
+        buttons.grid(row=2, column=0, columnspan=2, pady=(6, 0))
+        tk.Button(buttons, text="Solve", command=self.solve_board).grid(row=0, column=0, padx=3)
+        tk.Button(buttons, text="Clear board", command=self.clear_board).grid(row=0, column=1, padx=3)
+        tk.Button(buttons, text="New size", command=self.show_size_form).grid(row=0, column=2, padx=3)
         "put the cursor in the top-left cell so the user can start typing at once"
         self.entries[0][0].focus_set()
 
@@ -156,7 +205,7 @@ class SolverApp:
         return True
 
     def set_cell(self, entry, ch):
-        "overwrite the text of a cell (used to turn 'f' into 'F')"
+        "overwrite the text of an input cell (used to turn 'f' into 'F' and to clear)"
         "validation is temporarily switched off so this edit is not re-checked"
         entry.configure(validate="none")
         entry.delete(0, tk.END)
@@ -182,7 +231,7 @@ class SolverApp:
     # ------------------------------------------------------------------
 
     def read_grid(self):
-        "convert the entry boxes into the list-of-strings format solver.py expects"
+        "convert the input cells into the list-of-strings format solver.py expects"
         grid = []
         for r in range(self.rows):
             line = ""
@@ -196,47 +245,72 @@ class SolverApp:
             grid.append(line)
         return grid
 
-    def reset_colors(self):
-        "put every cell back to the neutral colour and drop any M/S markers"
-        for r in range(self.rows):
-            for c in range(self.cols):
-                entry = self.entries[r][c]
-                entry.configure(bg=COLOR_NEUTRAL)
-                "M and S are solver output, not user input, so strip them out"
-                if self.vars[r][c].get() in ("M", "S"):
-                    self.set_cell(entry, "")
+    def read_total_mines(self):
+        "return the mine count as an int, None if blank, or raise ValueError if bad"
+        text = self.mines_var.get().strip()
+        if text == "":
+            return None
+        "int() raises ValueError on anything that is not a whole number"
+        total = int(text)
+        if total < 0:
+            raise ValueError("negative")
+        return total
+
+    def hide_results(self):
+        "take the result grid off screen and blank its cells"
+        self.result_heading.grid_remove()
+        self.result_frame.grid_remove()
+        for row in self.results:
+            for label in row:
+                label.configure(text="", bg=COLOR_NEUTRAL)
+        self.summary_var.set("")
 
     def solve_board(self):
-        "run the solver on the current board and paint the results"
+        "run the solver on the current board and paint the result grid beside it"
         "start from a clean slate so re-solving after edits works properly"
-        self.reset_colors()
+        self.hide_results()
         grid = self.read_grid()
         try:
-            mines, safes = solve(grid)
+            total = self.read_total_mines()
+        except ValueError:
+            messagebox.showerror("Bad mine count", "Total mines must be a whole number of 0 or more, or blank.")
+            return
+        try:
+            mines, safes = solve_with_total(grid, total)
+        except ValueError as exc:  # impossible mine count for this board
+            messagebox.showerror("Bad mine count", str(exc))
+            return
         except Exception as exc:  # solver hit something it could not handle
             messagebox.showerror("Solver error", str(exc))
             return
+        "how many cells are still undecided, for the summary line"
+        unknown = 0
         for r in range(self.rows):
             for c in range(self.cols):
-                entry = self.entries[r][c]
-                "only unknown cells get coloured; typed numbers and F stay as they are"
-                if grid[r][c] != "?":
-                    continue
-                if (r, c) in mines:
-                    self.set_cell(entry, "M")
-                    entry.configure(bg=COLOR_MINE)
+                label = self.results[r][c]
+                ch = grid[r][c]
+                "typed numbers and F are copied across on a neutral background"
+                if ch != "?":
+                    label.configure(text=ch, bg=COLOR_NEUTRAL)
+                elif (r, c) in mines:
+                    label.configure(text="M", bg=COLOR_MINE)
                 elif (r, c) in safes:
-                    self.set_cell(entry, "S")
-                    entry.configure(bg=COLOR_SAFE)
+                    label.configure(text="S", bg=COLOR_SAFE)
                 else:
-                    entry.configure(bg=COLOR_UNKNOWN)
+                    label.configure(text="?", bg=COLOR_UNKNOWN)
+                    unknown += 1
+        self.summary_var.set(f"{len(mines)} mines, {len(safes)} safe, {unknown} unknown")
+        "now that the result grid is filled in, show it next to the input grid"
+        self.result_heading.grid()
+        self.result_frame.grid()
 
     def clear_board(self):
-        "wipe every cell back to empty and neutral"
-        self.reset_colors()
+        "wipe every input cell back to empty and hide the result grid"
+        self.hide_results()
         for r in range(self.rows):
             for c in range(self.cols):
                 self.set_cell(self.entries[r][c], "")
+        self.mines_var.set("")
         "back to the top-left corner, ready for a new position"
         self.entries[0][0].focus_set()
 

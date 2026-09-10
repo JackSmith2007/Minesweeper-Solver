@@ -14,6 +14,10 @@ When the obvious rules run dry, the solver looks for nested constraints. If one 
 
 Exhaustive enumeration for the remaining hard cases (trying every consistent mine layout and keeping only what is true in all of them) is planned but not built yet.
 
+### Using the total mine count
+
+Real minesweeper shows a mine counter, and that number is extra information the numbers on the board alone do not give you. If you enter it, the app adds one more constraint before solving: "all unrevealed cells together hold (total minus flagged) mines". That constraint goes through the same subtraction rule as every other one, so the solver can deduce things like "the numbers already account for every mine, so every cell no number touches is safe", or the reverse, "the leftover mines must all be in the cells no number touches". This lives in `total_mines.py`, which wraps the original solver without changing it. The field is optional: leave it blank and the plain solver runs.
+
 ## How to run
 
 Python 3 is required. There are no dependencies beyond the standard library.
@@ -31,7 +35,7 @@ python gui.py    # graphical version (tkinter)
 | `0`-`8`   | revealed number |
 | `F`       | flagged mine |
 
-In the GUI, an empty box also means unrevealed, and a lowercase `f` is accepted as `F`. After solving, proven mines turn red with an `M`, proven safe cells turn green with an `S`, and undecided cells turn gray.
+In the GUI, an empty box also means unrevealed, and a lowercase `f` is accepted as `F`. Clicking Solve shows a second grid beside your input: proven mines are red with an `M`, proven safe cells are green with an `S`, undecided cells are gray with a `?`, and the numbers and flags you typed are copied across unchanged. Your input grid stays editable, so you can tweak it and solve again. The "Total mines" box is optional (see above); the console version does not ask for it.
 
 Console output coordinates are `(row, col)`, counted from zero.
 
@@ -56,3 +60,12 @@ ROW 2: 121
 Mines:  [(0, 0), (0, 2)]
 Safes:  [(0, 1)]
 ```
+
+### Example where the mine count matters
+
+```
+1??
+???
+```
+
+The `1` needs one mine among its three neighbours, but the two cells in the right-hand column touch no number at all, so without more information every unrevealed cell is unknown. Enter a total of 1 mine in the GUI and the solver concludes the single mine must be next to the `1`, so both right-hand cells are safe. Enter a total of 3 and it concludes the right-hand cells must both be mines.
